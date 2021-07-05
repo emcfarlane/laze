@@ -4,16 +4,78 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"io/fs"
 	"log"
 	"os"
 	"os/exec"
 	"path"
+	"path/filepath"
 	"regexp"
 	"runtime"
 
 	"go.starlark.net/starlark"
 	"go.starlark.net/starlarkstruct"
 )
+
+// File
+const fileConstructor starlark.String = "file"
+
+func newFile(key string, fi fs.FileInfo) (*starlarkstruct.Struct, error) {
+	name := fi.Name()
+	dir := path.Dir(key)
+	ospath, err := filepath.Abs(filepath.FromSlash(key))
+	if err != nil {
+		return nil, err
+	}
+	return starlarkstruct.FromStringDict(fileConstructor, starlark.StringDict{
+		"basename":     starlark.String(path.Base(name)),
+		"dirname":      starlark.String(filepath.FromSlash(dir)),
+		"extension":    starlark.String(path.Ext(name)),
+		"path":         starlark.String(ospath),
+		"is_directory": starlark.Bool(fi.IsDir()),
+		//"is_source":    starlark.Bool(isSource),
+		"size": starlark.MakeInt64(fi.Size()),
+	}), nil
+}
+
+// target lazily resolves the action to a starlark value.
+type target struct {
+	label  string
+	action *Action
+}
+
+func newTarget(label string, action *Action) *target {
+	return &target{
+		label:  label,
+		action: action,
+	}
+}
+
+func (t *target) String() string {
+	return fmt.Sprintf("target(label = %s, value = %s)", t.label, t.action.Value)
+}
+func (t *target) Type() string          { return "target" }
+func (t *target) Truth() starlark.Bool  { return t.action.Value.Truth() }
+func (t *target) Hash() (uint32, error) { return 0, fmt.Errorf("unhashable") }
+func (t *target) Freeze()               {} // immutable
+
+// Attr returns the value of the specified field.
+func (t *target) Attr(name string) (starlark.Value, error) {
+	switch name {
+	case "label":
+		return starlark.String(t.label), nil
+	case "value":
+		return t.action.Value, nil
+	default:
+		return nil, starlark.NoSuchAttrError(
+			fmt.Sprintf("target has no .%s attribute", name))
+	}
+}
+
+// AttrNames returns a new sorted list of the struct fields.
+func (t *target) AttrNames() []string {
+	return []string{"label", "value"}
+}
 
 /*// Label is a path to a rule or file.
 type Label struct {
@@ -235,6 +297,7 @@ func (r *rule) CallInternal(thread *starlark.Thread, args starlark.Tuple, kwargs
 			return nil, fmt.Errorf("unexpected attribute: %s", name)
 		}
 
+		// Type check attributes args.
 		switch a.typ {
 		case attrTypeBool:
 			_, ok = value.(starlark.Bool)

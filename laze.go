@@ -30,15 +30,15 @@ type Action struct {
 	//Func func(ctx context.Context) error
 
 	//Label  *Label
-	Key   string
-	Attrs starlark.StringDict
-	Func  *starlark.Function
+	Key string
+	//Attrs starlark.StringDict
+	//Func  *starlark.Function
 
 	// URL: 	https://network.com/file/path
 	// ABSOLUTE: 	/root/file/path
 	// LOCAL: 	some/file/path
 	// RELATIVE: 	./file
-	//func func(context.Context, *starlark.Thread) (starlark.Value, error)
+	Func func(*starlark.Thread) (starlark.Value, error)
 
 	triggers []*Action // reverse of deps
 	pending  int       // number of actions pending
@@ -121,6 +121,14 @@ func (b *Builder) load(thread *starlark.Thread, module string) (starlark.StringD
 	return starlark.ExecFile(thread, module, src, globals)
 }
 
+func (b *Builder) addAction(label string, action *Action) *Action {
+	if b.actionCache == nil {
+		b.actionCache = make(map[string]*Action)
+	}
+	b.actionCache[label] = action
+	return action
+}
+
 func (b *Builder) createAction(ctx context.Context, label string) (*Action, error) {
 
 	u, err := url.Parse(label)
@@ -180,18 +188,25 @@ func (b *Builder) createAction(ctx context.Context, label string) (*Action, erro
 		b.moduleCache[module] = true
 	}
 
-	// Load rule.
+	// Load rule, or file.
 	r, ok := b.rulesCache[key]
 	if !ok {
-		if !exists(key) {
+		fi, err := os.Stat(key)
+		if err != nil {
 			return nil, fmt.Errorf("error: label not found: %s", label)
 		}
 
-		// File parameter.
-		panic(fmt.Sprintf("TODO: loading files!"))
+		// File param.
+		return b.addAction(label, &Action{
+			Deps: nil,
+			Key:  key,
+			Func: func(*starlark.Thread) (starlark.Value, error) {
+				return newFile(key, fi)
+			},
+		}), nil
 	}
 
-	// Parse query params
+	// Parse query params, override args.
 	for key, vals := range u.Query() {
 		attr, ok := r.attrs[key]
 		if !ok {
@@ -215,13 +230,16 @@ func (b *Builder) createAction(ctx context.Context, label string) (*Action, erro
 	// TODO: caching the ins & outs?
 	// should caching be done on the action execution?
 
-	// Find arg deps as attributes.
+	attrs := make(starlark.StringDict)
+
+	// Find arg deps as attributes and resolve args to targets.
 	var deps []*Action
 	for key, arg := range r.args {
 		attr := r.attrs[key]
 
 		switch attr.typ {
 		case attrTypeLabel:
+			fmt.Println("arg", key, "typeLabel")
 			label := string(arg.(starlark.String))
 			action, err := b.createAction(ctx, label)
 			if err != nil {
@@ -229,7 +247,11 @@ func (b *Builder) createAction(ctx context.Context, label string) (*Action, erro
 				return nil, err
 			}
 			deps = append(deps, action)
+			fmt.Println("deps", key, "newTarget")
+			attrs[key] = newTarget(label, action)
 		case attrTypeLabelList:
+			fmt.Println("arg", key, "typeLabelList")
+			var elems []starlark.Value
 			iter := arg.(starlark.Iterable).Iterate()
 			var x starlark.Value
 			for iter.Next(&x) {
@@ -239,28 +261,32 @@ func (b *Builder) createAction(ctx context.Context, label string) (*Action, erro
 					return nil, err
 				}
 				deps = append(deps, action)
+				elems = append(elems, newTarget(
+					label, action,
+				))
 			}
 			iter.Done()
+			fmt.Println("deps", key, "newTarget")
+			attrs[key] = starlark.NewList(elems)
 		case attrTypeLabelKeyedStringDict:
 			panic("TODO")
 		default:
-			// do nothing
+			// copy
+			attrs[key] = arg
 		}
 	}
 
 	// TODO: build action list...
-	action := &Action{
-		Deps:  deps,
-		Key:   key,
-		Attrs: r.args,
-		Func:  r.impl,
-	}
-
-	if b.actionCache == nil {
-		b.actionCache = make(map[string]*Action)
-	}
-	b.actionCache[label] = action
-	return action, nil
+	return b.addAction(label, &Action{
+		Deps: deps,
+		Key:  key,
+		Func: func(thread *starlark.Thread) (starlark.Value, error) {
+			args := starlark.Tuple{
+				newCtxModule(ctx, key, attrs),
+			}
+			return starlark.Call(thread, r.impl, args, nil)
+		},
+	}), nil
 }
 
 func (b *Builder) init(ctx context.Context) error {
@@ -297,7 +323,7 @@ func (b *Builder) cleanup() error {
 
 func (b *Builder) Build(ctx context.Context, label string) (*Action, error) {
 
-	//
+	// create action
 	root, err := b.createAction(ctx, label)
 	if err != nil {
 		return nil, err
@@ -369,12 +395,7 @@ func (b *Builder) Do(ctx context.Context, root *Action) {
 				var value starlark.Value = starlark.None
 				var err error
 				if a.Func != nil && !a.Failed {
-
-					args := starlark.Tuple([]starlark.Value{
-						newCtxModule(ctx, a.Key, a.Attrs),
-					})
-
-					value, err = starlark.Call(thread, a.Func, args, nil)
+					value, err = a.Func(thread)
 				}
 				if err != nil {
 					// Log?

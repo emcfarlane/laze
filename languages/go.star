@@ -15,8 +15,9 @@ def _go_impl(ctx):
 
     if ctx.attrs.cgo:
         env.append("CGO_ENABLED=1")
-        env.append("CC=" + ctx.attrs._zcc)
-        env.append("CXX=" + ctx.attrs._zxx)
+        env.append("CC=" + ctx.attrs._zcc.value.path)
+        print("ZCC", ctx.attrs._zcc)
+        env.append("CXX=" + ctx.attrs._zxx.value.path)
     else:
         env.append("CGO_ENABLED=0")
     print("ENV:", env)

@@ -78,7 +78,8 @@ func (q *actionQueue) pop() *Action {
 
 // A Builder holds global state about a build.
 type Builder struct {
-	WorkDir string // temporary work directoy
+	Dir    string // work directoy
+	tmpDir string // temporary directoy
 
 	actionCache map[string]*Action // a cache of already-constructed actions
 	rulesCache  map[string]*rule   // a cache of created rules
@@ -294,30 +295,30 @@ func (b *Builder) init(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	b.WorkDir = tmpDir
+	b.Dir = ""
+	b.tmpDir = tmpDir
 	return nil
 }
 
 func (b *Builder) cleanup() error {
-	if b.WorkDir != "" {
-		start := time.Now()
-		for {
-			err := os.RemoveAll(b.WorkDir)
-			if err == nil {
-				break
-			}
-
-			// On some configurations of Windows, directories containing executable
-			// files may be locked for a while after the executable exits (perhaps
-			// due to antivirus scans?). It's probably worth a little extra latency
-			// on exit to avoid filling up the user's temporary directory with leaked
-			// files. (See golang.org/issue/30789.)
-			if runtime.GOOS != "windows" || time.Since(start) >= 500*time.Millisecond {
-				return fmt.Errorf("failed to remove work dir: %v", err)
-			}
-			time.Sleep(5 * time.Millisecond)
-		}
-	}
+	//if b.WorkDir != "" {
+	//	start := time.Now()
+	//	for {
+	//		err := os.RemoveAll(b.WorkDir)
+	//		if err == nil {
+	//			break
+	//		}
+	//		// On some configurations of Windows, directories containing executable
+	//		// files may be locked for a while after the executable exits (perhaps
+	//		// due to antivirus scans?). It's probably worth a little extra latency
+	//		// on exit to avoid filling up the user's temporary directory with leaked
+	//		// files. (See golang.org/issue/30789.)
+	//		if runtime.GOOS != "windows" || time.Since(start) >= 500*time.Millisecond {
+	//			return fmt.Errorf("failed to remove work dir: %v", err)
+	//		}
+	//		time.Sleep(5 * time.Millisecond)
+	//	}
+	//}
 	return nil
 }
 
@@ -437,67 +438,3 @@ func (b *Builder) Do(ctx context.Context, root *Action) {
 	}
 	fmt.Println("completed do")
 }
-
-/*
-// KO run.
-type run struct {
-	name       string
-	env        []string
-	deps, outs []string
-
-	//args []string
-
-	//tempDir bool
-}
-
-func run(ctx context.Context, ip string, dir string, platform v1.Platform, disableOptimizations bool) (string, error) {
-	tmpDir, err := ioutil.TempDir("", "laze")
-	if err != nil {
-		return "", err
-	}
-	file := filepath.Join(tmpDir, "out")
-
-	args := make([]string, 0, 7)
-	args = append(args, "build")
-	if disableOptimizations {
-		// Disable optimizations (-N) and inlining (-l).
-		args = append(args, "-gcflags", "all=-N -l")
-	}
-	args = append(args, "-o", file)
-	args = addGo113TrimPathFlag(args)
-	args = append(args, ip)
-	cmd := exec.CommandContext(ctx, "go", args...)
-	cmd.Dir = dir
-
-	// Last one wins
-	defaultEnv := []string{
-		"CGO_ENABLED=0",
-		"GOOS=" + platform.OS,
-		"GOARCH=" + platform.Architecture,
-	}
-
-	if strings.HasPrefix(platform.Architecture, "arm") && platform.Variant != "" {
-		goarm, err := getGoarm(platform)
-		if err != nil {
-			return "", fmt.Errorf("goarm failure for %s: %v", ip, err)
-		}
-		if goarm != "" {
-			defaultEnv = append(defaultEnv, "GOARM="+goarm)
-		}
-	}
-
-	cmd.Env = append(defaultEnv, os.Environ()...)
-
-	var output bytes.Buffer
-	cmd.Stderr = &output
-	cmd.Stdout = &output
-
-	log.Printf("Building %s for %s", ip, platformToString(platform))
-	if err := cmd.Run(); err != nil {
-		os.RemoveAll(tmpDir)
-		log.Printf("Unexpected error running \"go build\": %v\n%v", err, output.String())
-		return "", err
-	}
-	return file, nil
-}
-*/

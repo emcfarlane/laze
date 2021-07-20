@@ -27,12 +27,8 @@ var (
 // An Action represents a single action in the action graph.
 type Action struct {
 	Deps []*Action // Actions this action depends on.
-	//Func func(ctx context.Context) error
 
-	//Label  *Label
-	Key string
-	//Attrs starlark.StringDict
-	//Func  *starlark.Function
+	Key string // Key is the labels path.
 
 	// URL: 	https://network.com/file/path
 	// ABSOLUTE: 	/root/file/path
@@ -50,6 +46,39 @@ type Action struct {
 	Failed    bool           // whether the action failed
 	TimeReady time.Time
 	TimeDone  time.Time
+}
+
+// Struct is a helper for strarlarkstruct.
+type Struct struct {
+	*starlarkstruct.Struct
+}
+
+// loadStructValue gets the value and checks the constructor type matches.
+func (a *Action) loadStructValue(constructor starlark.Value) (Struct, error) {
+	if a.Value == nil {
+		return Struct{}, fmt.Errorf("missing struct value")
+	}
+	s, ok := a.Value.(*starlarkstruct.Struct)
+	if !ok {
+		return Struct{}, fmt.Errorf("invalid type: %T", a.Value)
+	}
+	// Constructor values must be comparable
+	if c := s.Constructor(); c != constructor {
+		return Struct{}, fmt.Errorf("invalid struct type: %s", c)
+	}
+	return Struct{s}, nil
+}
+
+func (s Struct) AttrString(name string) (string, error) {
+	x, err := s.Attr(name)
+	if err != nil {
+		return "", err
+	}
+	v, ok := starlark.AsString(x)
+	if !ok {
+		return "", fmt.Errorf("attr %q not a string", name)
+	}
+	return v, nil
 }
 
 // An actionQueue is a priority queue of actions.
@@ -240,18 +269,15 @@ func (b *Builder) createAction(ctx context.Context, label string) (*Action, erro
 
 		switch attr.typ {
 		case attrTypeLabel:
-			fmt.Println("arg", key, "typeLabel")
 			label := string(arg.(starlark.String))
 			action, err := b.createAction(ctx, label)
 			if err != nil {
-				fmt.Println("failed because of action!", label)
-				return nil, err
+				return nil, fmt.Errorf("action creation: %w", err)
 			}
 			deps = append(deps, action)
-			fmt.Println("deps", key, "newTarget")
 			attrs[key] = newTarget(label, action)
+
 		case attrTypeLabelList:
-			fmt.Println("arg", key, "typeLabelList")
 			var elems []starlark.Value
 			iter := arg.(starlark.Iterable).Iterate()
 			var x starlark.Value
@@ -259,7 +285,7 @@ func (b *Builder) createAction(ctx context.Context, label string) (*Action, erro
 				label := string(x.(starlark.String))
 				action, err := b.createAction(ctx, label)
 				if err != nil {
-					return nil, err
+					return nil, fmt.Errorf("action creation: %w", err)
 				}
 				deps = append(deps, action)
 				elems = append(elems, newTarget(
@@ -267,8 +293,8 @@ func (b *Builder) createAction(ctx context.Context, label string) (*Action, erro
 				))
 			}
 			iter.Done()
-			fmt.Println("deps", key, "newTarget")
 			attrs[key] = starlark.NewList(elems)
+
 		case attrTypeLabelKeyedStringDict:
 			panic("TODO")
 		default:
@@ -395,6 +421,7 @@ func (b *Builder) Do(ctx context.Context, root *Action) {
 				// Run job.
 				var value starlark.Value = starlark.None
 				var err error
+				fmt.Println("RUNNING ACTION", a.Key, "failed?", a.Failed)
 				if a.Func != nil && !a.Failed {
 					value, err = a.Func(thread)
 				}

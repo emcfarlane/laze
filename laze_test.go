@@ -5,8 +5,25 @@ import (
 	"testing"
 
 	"go.starlark.net/starlark"
-	"go.starlark.net/starlarkstruct"
 )
+
+//func (b *Builder) testFile(
+//	basename string,
+//	dirname string,
+//	extension string,
+//	filename string,
+//	isDir bool,
+//	size int64,
+//) starlark.Value {
+//	return starlarkstruct.FromStringDict(fileConstructor, starlark.StringDict{
+//		"basename":     starlark.String(basename),
+//		"dirname":      starlark.String(dirname),
+//		"extension":    starlark.String(extension),
+//		"filename":     starlark.String(filename),
+//		"is_directory": starlark.Bool(isDir),
+//		"size":         starlark.MakeInt64(size),
+//	})
+//}
 
 func TestBuild(t *testing.T) {
 
@@ -18,52 +35,26 @@ func TestBuild(t *testing.T) {
 	b := Builder{}
 
 	tests := []struct {
-		name    string
-		label   string
-		wants   []interface{}
-		wantErr error
+		name            string
+		label           string
+		wantConstructor starlark.Value
+		wantErr         error
 	}{{
-		name:  "go",
-		label: "testdata/go/hello",
-		wants: []interface{}{
-			result{
-				value: starlarkstruct.FromStringDict(
-					starlarkstruct.Default, starlark.StringDict{
-						"outs": starlark.NewList([]starlark.Value{
-							starlark.String("testdata/go/hello"),
-						}),
-					},
-				),
-			},
-		},
+		name:            "go",
+		label:           "testdata/go/hello",
+		wantConstructor: fileConstructor,
 	}, {
-		name:  "cgo",
-		label: "testdata/cgo/helloc",
-		wants: []interface{}{
-			result{
-				value: starlarkstruct.FromStringDict(
-					starlarkstruct.Default, starlark.StringDict{
-						"outs": starlark.NewList([]starlark.Value{
-							starlark.String("testdata/cgo/helloc"),
-						}),
-					},
-				),
-			},
-		},
+		name:            "cgo",
+		label:           "testdata/cgo/helloc",
+		wantConstructor: fileConstructor,
 	}, {
-		name:  "xcgo",
-		label: "testdata/cgo/helloc?goarch=amd64&goos=linux",
-		wants: []interface{}{
-			result{
-				value: starlarkstruct.FromStringDict(
-					starlarkstruct.Default, starlark.StringDict{
-						"outs": starlark.NewList([]starlark.Value{
-							starlark.String("testdata/cgo/helloc"),
-						}),
-					},
-				),
-			},
-		},
+		name:            "xcgo",
+		label:           "testdata/cgo/helloc?goarch=amd64&goos=linux",
+		wantConstructor: fileConstructor,
+	}, {
+		name:            "tarxcgo",
+		label:           "testdata/packaging/helloc.tar.gz",
+		wantConstructor: fileConstructor,
 	}}
 
 	for _, tt := range tests {
@@ -76,17 +67,14 @@ func TestBuild(t *testing.T) {
 			if got.Failed && got.Error != tt.wantErr {
 				t.Fatalf("error got: %v, want: %v", got.Error, tt.wantErr)
 			}
+			if got.Failed {
+				t.Fatal("error failed: ", got)
+			}
 
-			for _, want := range tt.wants {
-				switch v := want.(type) {
-				case result:
-					ok, err := starlark.Equal(got.Value, v.value)
-					if err != nil {
-						t.Error(err)
-					}
-					if !ok {
-						t.Fatalf("got %v != %v", v.value, got.Value)
-					}
+			if c := tt.wantConstructor; c != nil {
+				_, err := got.loadStructValue(c)
+				if err != nil {
+					t.Fatalf("error value: %v", err)
 				}
 			}
 		})

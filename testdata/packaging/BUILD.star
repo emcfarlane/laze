@@ -1,9 +1,8 @@
-load("languages/packaging.star", "tar")
+load("rules/packaging.star", "tar")
 
 tar(
-    name "helloc.tar",
-    strip_prefix = "testdata/cgo",
-    package_dir = "/usr/bin",
+    name = "helloc.tar.gz",
     srcs = ["testdata/cgo/helloc?goarch=amd64&goos=linux"],
-    mode = "0555",
+    package_dir = "/usr/bin",
+    strip_prefix = "testdata/cgo",
 )

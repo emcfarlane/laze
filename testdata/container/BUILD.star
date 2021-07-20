@@ -1,4 +1,4 @@
-load("languages/container.star", "image", "pull")
+load("rules/container.star", "image", "pull")
 
 # BASE_IMAGE
 pull(

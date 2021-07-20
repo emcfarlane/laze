@@ -31,9 +31,9 @@ def _go_impl(ctx):
         env = env,
     )
 
-    # TODO: providers list...
-    return struct(
-        outs = [ctx.build_dir + "/" + ctx.attrs.name],
+    # TODO: providers list...?
+    return ctx.actions.file(
+        name = ctx.build_dir + "/" + ctx.attrs.name,
     )
 
 go = rule(
@@ -83,7 +83,7 @@ go = rule(
             "wasm",
         ]),
         "cgo": attr.bool(),
-        "_zxx": attr.label(allow_files = True, default = "languages/go/zxx"),
-        "_zcc": attr.label(allow_files = True, default = "languages/go/zcc"),
+        "_zxx": attr.label(allow_files = True, default = "rules/go/zxx"),
+        "_zcc": attr.label(allow_files = True, default = "rules/go/zcc"),
     },
 )

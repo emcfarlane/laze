@@ -3,91 +3,135 @@ package laze
 import (
 	"archive/tar"
 	"compress/gzip"
+	"fmt"
 	"io"
 	"os"
+	"path"
+	"strings"
 	"time"
 
 	"go.starlark.net/starlark"
+	"go.starlark.net/starlarkstruct"
 )
 
 type packaging struct {
 	*actions
 }
 
-//pkg_tar(
-//    name = "bazel-bin",
-//    strip_prefix = "/src",
-//    package_dir = "/usr/bin",
-//    srcs = ["//src:bazel"],
-//    mode = "0755",
-//)
+func newPackagingModule(a *actions) *starlarkstruct.Module {
+	p := packaging{a}
+	return &starlarkstruct.Module{
+		Name: "container",
+		Members: starlark.StringDict{
+			"tar": starlark.NewBuiltin("packaging.tar", p.tar),
+		},
+	}
+}
 
-// Create a tarball...
+// tar creates a tarball.
 func (p *packaging) tar(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
 	var (
-		name string
-		mode int64
+		name        string
+		srcs        *starlark.List
+		packageDir  string
+		stripPrefix string
 	)
 	if err := starlark.UnpackArgs(
 		"tar", args, kwargs,
-		"name", &name, "mode", &mode,
+		"name", &name, "srcs", &srcs, "package_dir?", &packageDir, "strip_prefix?", &stripPrefix,
 	); err != nil {
 		return nil, err
 	}
 
 	creationTime := time.Time{} // zero
+	filename := p.key
 
-	f, err := os.Create(name)
-	if err != nil {
-		return nil, err
-	}
-	defer f.Close()
-
-	gw := gzip.NewWriter(f)
-	defer gw.Close()
-
-	tw := tar.NewWriter(gw)
-	defer tw.Close()
-
-	addFile := func(name string) error {
-		file, err := os.Open(name)
+	createTar := func(filename string) error {
+		f, err := os.Create(filename)
 		if err != nil {
 			return err
 		}
-		defer file.Close()
+		defer f.Close()
 
-		stat, err := file.Stat()
-		if err != nil {
-			return err
+		// compress writer
+		var cw io.WriteCloser
+		switch {
+		case strings.HasSuffix(filename, ".tar.gz"):
+			cw = gzip.NewWriter(f)
+			defer cw.Close()
+		default:
+			cw = f
 		}
 
-		header := &tar.Header{
-			Name:     name,
-			Size:     stat.Size(),
-			Typeflag: tar.TypeReg,
-			// Use a fixed Mode, so that this isn't sensitive to the directory and umask
-			// under which it was created. Additionally, windows can only set 0222,
-			// 0444, or 0666, none of which are executable.
-			Mode:    mode,
-			ModTime: creationTime,
+		tw := tar.NewWriter(cw)
+		defer tw.Close()
+
+		addFile := func(filename, key string) error {
+			file, err := os.Open(filename)
+			if err != nil {
+				return err
+			}
+			defer file.Close()
+
+			stat, err := file.Stat()
+			if err != nil {
+				return err
+			}
+
+			header := &tar.Header{
+				Name:     key,
+				Size:     stat.Size(),
+				Typeflag: tar.TypeReg,
+				Mode:     int64(stat.Mode()),
+				ModTime:  creationTime,
+			}
+			// write the header to the tarball archive
+			if err := tw.WriteHeader(header); err != nil {
+				return err
+			}
+			// copy the file data to the tarball
+			if _, err := io.Copy(tw, file); err != nil {
+				return err
+			}
+			return nil
 		}
-		// write the header to the tarball archive
-		if err := tw.WriteHeader(header); err != nil {
-			return err
-		}
-		// copy the file data to the tarball
-		if _, err := io.Copy(tw, file); err != nil {
-			return err
+
+		iter := srcs.Iterate()
+		defer iter.Done()
+
+		var x starlark.Value
+		for iter.Next(&x) {
+			src, ok := x.(*target)
+			if !ok {
+				return fmt.Errorf("invalid src type")
+			}
+
+			fileProvider, err := src.action.loadStructValue(fileConstructor)
+			if err != nil {
+				return err
+			}
+			filename, err := fileProvider.AttrString("path")
+			if err != nil {
+				return err
+			}
+
+			// Form the key path of the file in the tar fs.
+			key := path.Join(packageDir, strings.TrimPrefix(src.action.Key, stripPrefix))
+
+			// TODO: strip_prefix
+			if err := addFile(filename, key); err != nil {
+				return err
+			}
 		}
 		return nil
 	}
-
-	for _, file := range files {
-		if err := addFile(file); err != nil {
-			return nil, err
-		}
+	if err := createTar(filename); err != nil {
+		return nil, err
 	}
 
-	// Loop over files and create tarball
-	return starlark.None, nil
+	fi, err := os.Stat(filename)
+	if err != nil {
+		return nil, err
+	}
+	return newFile(filename, fi)
 }

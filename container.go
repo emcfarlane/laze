@@ -1,20 +1,20 @@
 package laze
 
 import (
-	"bytes"
-	"io"
-	"io/ioutil"
+	"fmt"
 	"os"
 
 	"github.com/containerd/stargz-snapshotter/estargz"
 	"github.com/google/go-containerregistry/pkg/authn"
 	"github.com/google/go-containerregistry/pkg/name"
+	cname "github.com/google/go-containerregistry/pkg/name"
 	v1 "github.com/google/go-containerregistry/pkg/v1"
 	"github.com/google/go-containerregistry/pkg/v1/empty"
 	"github.com/google/go-containerregistry/pkg/v1/mutate"
 	"github.com/google/go-containerregistry/pkg/v1/remote"
 	"github.com/google/go-containerregistry/pkg/v1/tarball"
 	"go.starlark.net/starlark"
+	"go.starlark.net/starlarkstruct"
 )
 
 // conatiner rules implemented with go-containerregistry.
@@ -25,13 +25,35 @@ type container struct {
 	*actions
 }
 
+func newContainerModule(a *actions) *starlarkstruct.Module {
+	c := container{a}
+	return &starlarkstruct.Module{
+		Name: "container",
+		Members: starlark.StringDict{
+			"pull":  starlark.NewBuiltin("container.run", c.pull),
+			"build": starlark.NewBuiltin("container.run", c.build),
+			"push":  starlark.NewBuiltin("container.run", c.push),
+		},
+	}
+}
+
+const imageConstructor starlark.String = "image"
+
+// TODO: return starlark provider.
+func newImage(filename, tag string) starlark.Value {
+	return starlarkstruct.FromStringDict(imageConstructor, map[string]starlark.Value{
+		"name": starlark.String(filename),
+		"tag":  starlark.String(tag),
+	})
+}
+
 func (c *container) pull(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
 	var (
 		rname     string
 		reference string
 	)
 	if err := starlark.UnpackArgs(
-		"pull", args, kwargs,
+		"container_pull", args, kwargs,
 		"name", &rname, "reference", &reference,
 	); err != nil {
 		return nil, err
@@ -48,79 +70,130 @@ func (c *container) pull(thread *starlark.Thread, b *starlark.Builtin, args star
 		return nil, err
 	}
 
-	f, err := os.Create("image_base")
+	// TODO: how the fuck do files work?
+	filename := "image_base.tar"
+	f, err := os.Create(filename)
 	if err != nil {
 		panic(err)
 	}
 	defer f.Close()
 
+	// TODO: tag? what is the tag value???
+	tag := "latest"
+
 	if err := tarball.Write(ref, img, f); err != nil {
 		return nil, err
 	}
-
-	// TODO: return starlark provider.
-	return starlark.None, nil
+	return newImage(filename, tag), nil
 }
 
-func (c *container) image(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
+func (c *container) build(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
 	var (
-		rname       string
-		rbase       string
-		rentrypoint []string
-		rfiles      []string
-		rlabels     map[string]string
+		name              string
+		entrypoint        []string
+		tar               *target
+		base              *target
+		prioritized_files []string
 	)
 	if err := starlark.UnpackArgs(
-		"pull", args, kwargs,
-		"name", &rname,
-		"base", &rbase,
-		"entrypoint", &rentrypoint,
-		"files", &rfiles,
-		"labels", &rlabels,
+		"container_build", args, kwargs,
+		"name", &name,
+		"entrypoint", &entrypoint,
+		"tar", &tar,
+		"base?", &base,
+		"prioritized_files?", &prioritized_files,
 	); err != nil {
 		return nil, err
 	}
 
-	basepath := rbase
 	// TODO: load tag from provider?
 
-	base := empty.Image
-	if rbase != "" {
-		// Load base from tar.
+	baseImage := empty.Image
+	if base != nil {
+		// Load base iamge from local.
+		imageProvider, err := base.action.loadStructValue(imageConstructor)
+		if err != nil {
+			return nil, fmt.Errorf("image provider: %w", err)
+		}
+		filename, err := imageProvider.AttrString("name")
+		if err != nil {
+			return nil, err
+		}
+
+		tagStr, err := imageProvider.AttrString("tag")
+		if err != nil {
+			return nil, err
+		}
+
+		tag, err := cname.NewTag(tagStr, cname.StrictValidation)
+		if err != nil {
+			return nil, err
+		}
 
 		// Load base from filesystem.
-		img, err := tarball.ImageFromPath(basepath, &tag)
+		img, err := tarball.ImageFromPath(filename, &tag)
 		if err != nil {
-			panic(err)
+			return nil, err
 		}
+		baseImage = img
 	}
 
+	var layers []mutate.Addendum
+
 	// Construct a tarball with the binary and produce a layer.
-	binaryLayerBuf, err := tarBinary(appPath, file, v1.Time{})
+	//binaryLayerBuf, err := tarBinary(appPath, file, v1.Time{})
+	//if err != nil {
+	//	return nil, err
+	//}
+	//binaryLayerBytes := binaryLayerBuf.Bytes()
+
+	tarVal, ok := tar.action.Value.(*starlarkstruct.Struct)
+	if !ok {
+		return nil, fmt.Errorf("invalid tar type")
+	}
+	tarFileVal, err := tarVal.Attr("file")
 	if err != nil {
 		return nil, err
 	}
-	binaryLayerBytes := binaryLayerBuf.Bytes()
-	binaryLayer, err := tarball.LayerFromOpener(func() (io.ReadCloser, error) {
-		return ioutil.NopCloser(bytes.NewBuffer(binaryLayerBytes)), nil
-	}, tarball.WithCompressedCaching, tarball.WithEstargzOptions(estargz.WithPrioritizedFiles([]string{
-		// When using estargz, prioritize downloading the binary entrypoint.
-		appPath,
-	})))
+
+	tarFileStruct, ok := tarFileVal.(*starlarkstruct.Struct)
+	if !ok {
+		return nil, fmt.Errorf("malformed tar file provider: invalid tar type")
+	}
+
+	tarFilenameVal, err := tarFileStruct.Attr("name")
+	if err != nil {
+		return nil, err
+	}
+	tarFilename := string(tarFilenameVal.(starlark.String))
+
+	r, err := os.Open(tarFilename)
+	if err != nil {
+		return nil, err
+	}
+	defer r.Close()
+
+	imageLayer, err := tarball.LayerFromReader(
+		r, tarball.WithCompressedCaching,
+		tarball.WithEstargzOptions(estargz.WithPrioritizedFiles(
+			// When using estargz, prioritize downloading the binary entrypoint.
+			prioritized_files,
+		)),
+	)
 	if err != nil {
 		return nil, err
 	}
 	layers = append(layers, mutate.Addendum{
-		Layer: binaryLayer,
+		Layer: imageLayer,
 		History: v1.History{
 			Author:    "laze",
-			CreatedBy: "laze " + rname,
+			CreatedBy: "laze " + name,
 			//Comment:   "go build output, at " + appPath,
 		},
 	})
 
 	// Augment the base image with our application layer.
-	appImage, err := mutate.Append(base, layers...)
+	appImage, err := mutate.Append(baseImage, layers...)
 	if err != nil {
 		return nil, err
 	}
@@ -132,19 +205,20 @@ func (c *container) image(thread *starlark.Thread, b *starlark.Builtin, args sta
 		return nil, err
 	}
 	cfg = cfg.DeepCopy()
-	cfg.Config.Entrypoint = rentrypoint
+	cfg.Config.Entrypoint = entrypoint
 	//updatePath(cfg)
-	cfg.Config.Env = append(cfg.Config.Env, "LAZE_DATA_PATH="+kodataRoot)
+	cfg.Config.Env = append(cfg.Config.Env, "LAZE_DATA_PATH="+"/") // TODO
 	cfg.Author = "github.com/emcfarlane/laze"
 
 	if cfg.Config.Labels == nil {
 		cfg.Config.Labels = map[string]string{}
 	}
-	for k, v := range rlabels {
-		cfg.Config.Labels[k] = v
-	}
+	// TODO: Add support for labels.
+	//for k, v := range labels {
+	//	cfg.Config.Labels[k] = v
+	//}
 
-	image, err := mutate.ConfigFile(withApp, cfg)
+	img, err := mutate.ConfigFile(appImage, cfg)
 	if err != nil {
 		return nil, err
 	}
@@ -154,36 +228,61 @@ func (c *container) image(thread *starlark.Thread, b *starlark.Builtin, args sta
 	//	return mutate.CreatedAt(image, g.creationTime)
 	//}
 
-	f, err := os.Create("image")
+	filename := "image.tar"
+	f, err := os.Create(filename)
 	if err != nil {
 		panic(err)
 	}
 	defer f.Close()
 
+	reference := "gcr.io/foo/bar"
+	ref, err := cname.ParseReference(reference)
+	if err != nil {
+		return nil, err
+	}
+
 	if err := tarball.Write(ref, img, f); err != nil {
 		return nil, err
 	}
 
-	return nil, nil
+	tag := "latest" // TODO: tag?
+	return newImage(filename, tag), nil
 }
 
 func (c *container) push(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
+	var (
+		name              string
+		entrypoint        []string
+		tar               *target
+		base              *target
+		prioritized_files []string
+	)
+	if err := starlark.UnpackArgs(
+		"container_push", args, kwargs,
+		"name", &name,
+		"entrypoint", &entrypoint,
+		"tar", &tar,
+		"base?", &base,
+		"prioritized_files?", &prioritized_files,
+	); err != nil {
+		return nil, err
+	}
 
 	imgpath := "image"
 
-	tag, err := name.NewTag("gcr.io/foo/bar:latest", name.StrictValidation)
+	tag, err := cname.NewTag("gcr.io/foo/bar:latest", cname.StrictValidation)
 	if err != nil {
 		return nil, err
 	}
 
 	// Load base from filesystem.
-	img, err := tarball.ImageFromPath(imgpath, tag)
+	img, err := tarball.ImageFromPath(imgpath, &tag)
 	if err != nil {
 		return nil, err
 	}
 
 	reference := "gcr.io/foo/bar"
-	ref, err := name.ParseReference(reference)
+	ref, err := cname.ParseReference(reference)
 	if err != nil {
 		return nil, err
 	}

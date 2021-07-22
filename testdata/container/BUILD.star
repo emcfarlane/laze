@@ -1,23 +1,24 @@
-load("rules/container.star", "image", "pull")
+load("rules/container.star", "container_build", "container_pull", "container_push")
 
-# BASE_IMAGE
-pull(
-    name = "distroless",
-    ref = "gcr.io/distroless/base@sha256:730c5f8abe534d84b11b6315ef0ee173661d3784b261ed8e6ba1f5885efc31d7",
+# base image
+container_pull(
+    name = "distroless.tar",
+    reference = "gcr.io/distroless/base:nonroot",
 )
 
-# helloc is an image based on cross compiling packaing.
-image(
-    name = "helloc",
-    base = "./distroless",
+# helloc is an image based on cross compiling packaging
+container_build(
+    name = "helloc.tar",
+    base = "distroless.tar",
     entrypoint = ["/usr/bin/helloc"],
-    labels = ["latest"],
+    #labels = ["latest"],
     prioritized_files = ["/usr/bin/hello"],  # Supports estargz.
-    tars = ["../packaging/helloc.tar"],
+    tar = "../packaging/helloc.tar.gz",
 )
 
-push(
+# push the image to a registry
+container_push(
     name = "myrepo",
-    image = "./helloc",
-    ref = "gcr.io/laze/helloc:latest",
+    image = "helloc.tar",
+    reference = "gcr.io/laze/helloc:latest",
 )

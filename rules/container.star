@@ -1,59 +1,47 @@
 load("rule.star", "attr", "rule")
 
 def _container_pull_impl(ctx):
-    ctx.actions.container_pull(
-        name = "",
-    )
-
-    # TODO: providers list...
-    return struct(
-        outs = [ctx.build_dir + "/" + ctx.attrs.name],
+    return ctx.actions.container.pull(
+        name = ctx.attrs.name,
+        reference = ctx.attrs.reference,
     )
 
 container_pull = rule(
     impl = _container_pull_impl,
     attrs = {
-        "digest": attr.string(),
-        "registry": attr.string(),
-        "repository": attr.string(),
+        "reference": attr.string(mandatory = True),
     },
 )
 
 def _container_impl(ctx):
-    ctx.actions.container(
+    return ctx.actions.container.build(
         name = "",
+        base = ctx.attrs.base,
+        entrypoint = ctx.attrs.entrypoint,
+        prioritized_files = ctx.attrs.prioritized_files,
+        tar = ctx.attrs.tar,
     )
 
-    # TODO: providers list...
-    return struct(
-        outs = [ctx.build_dir + "/" + ctx.attrs.name],
-    )
-
-container = rule(
+container_build = rule(
     impl = _container_impl,
     attrs = {
-        "digest": attr.string(),
-        "registry": attr.string(),
-        "repository": attr.string(),
-        "prioritized_files": attr.string(),
-        "base": attr.label(),  # TODO: providers...
+        "base": attr.label(),  # TODO: provider image
+        "entrypoint": attr.string_list(),
+        #"labels": attr.string_list(),  # TODO
+        "prioritized_files": attr.string_list(),
+        "tar": attr.label(),
     },
 )
 
 def _container_push_impl(ctx):
-    ctx.actions.container(
+    return ctx.actions.container.push(
         name = "",
-    )
-
-    # TODO: providers list...
-    return struct(
-        outs = [ctx.build_dir + "/" + ctx.attrs.name],
     )
 
 container_push = rule(
     impl = _container_push_impl,
     attrs = {
-        "image": attr.label(),  # TODO: providers...
+        "image": attr.label(mandatory = True),  # TODO: providers...
         "reference": attr.string(),
     },
 )

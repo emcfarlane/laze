@@ -50,7 +50,7 @@ const (
 // attr defines attributes to a rules attributes.
 type attr struct {
 	typ        attrType
-	def        starlark.Value
+	def        starlark.Value // default
 	doc        string
 	executable bool
 	mandatory  bool
@@ -393,14 +393,17 @@ func attrStringList(thread *starlark.Thread, b *starlark.Builtin, args starlark.
 		return nil, err
 	}
 
-	iter := def.Iterate()
-	var x starlark.Value
-	for iter.Next(&x) {
-		if _, ok := starlark.AsString(x); !ok {
-			return nil, fmt.Errorf("got %s, want string", x.Type())
+	// Check defaults are all strings
+	if def != nil {
+		iter := def.Iterate()
+		var x starlark.Value
+		for iter.Next(&x) {
+			if _, ok := starlark.AsString(x); !ok {
+				return nil, fmt.Errorf("got %s, want string", x.Type())
+			}
 		}
+		iter.Done()
 	}
-	iter.Done()
 
 	return &attr{
 		typ:       attrTypeStringList,

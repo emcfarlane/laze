@@ -30,10 +30,10 @@ type Action struct {
 
 	Key string // Key is the labels path.
 
-	// URL: 	https://network.com/file/path
-	// ABSOLUTE: 	/root/file/path
-	// LOCAL: 	some/file/path
-	// RELATIVE: 	./file
+	// REMOTE: 	http://network.com/file/path
+	// ABSOLUTE: 	file:///root/file/path
+	// LOCAL: 	file://local/file/path
+	// RELATIVE: 	file ./file ../file
 	Func func(*starlark.Thread) (starlark.Value, error)
 
 	triggers []*Action // reverse of deps
@@ -159,24 +159,42 @@ func (b *Builder) addAction(label string, action *Action) *Action {
 	return action
 }
 
-func (b *Builder) createAction(ctx context.Context, label string) (*Action, error) {
-
+func parseLabel(label string, dir string) (*url.URL, error) {
 	u, err := url.Parse(label)
 	if err != nil {
 		return nil, err
 	}
-	isURL := err == nil && u.Scheme != "" && u.Host != ""
-	if isURL || err != nil {
-		// TODO: handle URL?
+	fmt.Printf("%+v\n", *u)
+	if err != nil {
 		return nil, fmt.Errorf("error: invalid label %s", label)
 	}
+	if u.Scheme == "" {
+		u.Scheme = "file"
+		if len(u.Path) > 0 && u.Path[0] != '/' {
+			u.Path = path.Join(dir, u.Path)
+		}
+	}
+	if u.Scheme != "file" {
+		return nil, fmt.Errorf("error: unknown scheme %s", u.Scheme)
+	}
 
+	// HACK: host -> path
+	if u.Scheme == "file" && u.Host != "" {
+		u.Path = path.Join(u.Host, u.Path)
+		u.Host = ""
+	}
+	return u, nil
+}
+
+func (b *Builder) createAction(ctx context.Context, u *url.URL) (*Action, error) {
+
+	// TODO: validate URL type
 	// TODO: label needs to be cleaned...
-	label = u.String()
+	label := u.String()
 	key := u.Path
 	name := path.Base(key)
 	dir := path.Dir(key)
-	fmt.Println("key", key, "name", name, "dir", dir)
+	fmt.Println("u", u.String(), "key", key, "name", name, "dir", dir)
 
 	if action, ok := b.actionCache[label]; ok {
 		return action, nil
@@ -270,7 +288,11 @@ func (b *Builder) createAction(ctx context.Context, label string) (*Action, erro
 		switch attr.typ {
 		case attrTypeLabel:
 			label := string(arg.(starlark.String))
-			action, err := b.createAction(ctx, label)
+			u, err := parseLabel(label, dir)
+			if err != nil {
+				return nil, err
+			}
+			action, err := b.createAction(ctx, u)
 			if err != nil {
 				return nil, fmt.Errorf("action creation: %w", err)
 			}
@@ -283,7 +305,11 @@ func (b *Builder) createAction(ctx context.Context, label string) (*Action, erro
 			var x starlark.Value
 			for iter.Next(&x) {
 				label := string(x.(starlark.String))
-				action, err := b.createAction(ctx, label)
+				u, err := parseLabel(label, dir)
+				if err != nil {
+					return nil, err
+				}
+				action, err := b.createAction(ctx, u)
 				if err != nil {
 					return nil, fmt.Errorf("action creation: %w", err)
 				}
@@ -349,9 +375,13 @@ func (b *Builder) cleanup() error {
 }
 
 func (b *Builder) Build(ctx context.Context, label string) (*Action, error) {
+	u, err := parseLabel(label, ".")
+	if err != nil {
+		return nil, err
+	}
 
 	// create action
-	root, err := b.createAction(ctx, label)
+	root, err := b.createAction(ctx, u)
 	if err != nil {
 		return nil, err
 	}

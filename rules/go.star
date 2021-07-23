@@ -1,9 +1,10 @@
 load("rule.star", "attr", "rule")
 
+# TODO: filepath.Join() support for pathing...
 def _go_impl(ctx):
-    #for name in dir(ctx.attrs):
-    #    print("go attrs", name)
-    #    print("go attrs", name, getattr(ctx.attrs, name))
+    # TODO: out_dir?
+    #name = ctx.actions.files.declare(ctx.out_dir, ctx.key)
+    #args = ["build", "-o", name]
     args = ["build", "-o", ctx.attrs.name]
 
     env = []
@@ -15,8 +16,9 @@ def _go_impl(ctx):
 
     if ctx.attrs.cgo:
         env.append("CGO_ENABLED=1")
-        env.append("CC=" + ctx.attrs._zcc)
-        env.append("CXX=" + ctx.attrs._zxx)
+        env.append("CC=" + ctx.attrs._zcc.value.path)
+        print("ZCC", ctx.attrs._zcc)
+        env.append("CXX=" + ctx.attrs._zxx.value.path)
     else:
         env.append("CGO_ENABLED=0")
     print("ENV:", env)
@@ -29,10 +31,8 @@ def _go_impl(ctx):
         args = args,
         env = env,
     )
-
-    # TODO: providers list...
-    return struct(
-        outs = [ctx.build_dir + "/" + ctx.attrs.name],
+    return ctx.actions.files.stat(
+        name = ctx.build_dir + "/" + ctx.attrs.name,
     )
 
 go = rule(
@@ -82,7 +82,7 @@ go = rule(
             "wasm",
         ]),
         "cgo": attr.bool(),
-        "_zxx": attr.label(allow_files = True, default = "languages/go/zxx"),
-        "_zcc": attr.label(allow_files = True, default = "languages/go/zcc"),
+        "_zxx": attr.label(allow_files = True, default = "file://rules/go/zxx"),
+        "_zcc": attr.label(allow_files = True, default = "file://rules/go/zcc"),
     },
 )

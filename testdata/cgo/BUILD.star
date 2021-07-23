@@ -1,4 +1,4 @@
-load("languages/go.star", "go")
+load("rules/go.star", "go")
 
 go(
     name = "helloc",

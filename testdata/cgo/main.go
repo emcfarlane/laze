@@ -2,15 +2,15 @@ package main
 
 // #include <stdio.h>
 // #include <stdlib.h>
+//
+// static void myprint(char* s) {
+//   printf("%s\n", s);
+// }
 import "C"
 import "unsafe"
 
-func Print(s string) {
-	cs := C.CString(s)
-	C.fputs(cs, (*C.FILE)(C.stdout))
-	C.free(unsafe.Pointer(cs))
-}
-
 func main() {
-	Print("Hello, cgo!")
+	cs := C.CString("Hello, cgo!")
+	C.myprint(cs)
+	C.free(unsafe.Pointer(cs))
 }

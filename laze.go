@@ -27,18 +27,14 @@ var (
 // An Action represents a single action in the action graph.
 type Action struct {
 	Deps []*Action // Actions this action depends on.
-	//Func func(ctx context.Context) error
 
-	//Label  *Label
-	Key   string
-	Attrs starlark.StringDict
-	Func  *starlark.Function
+	Key string // Key is the labels path.
 
-	// URL: 	https://network.com/file/path
-	// ABSOLUTE: 	/root/file/path
-	// LOCAL: 	some/file/path
-	// RELATIVE: 	./file
-	//func func(context.Context, *starlark.Thread) (starlark.Value, error)
+	// REMOTE: 	http://network.com/file/path
+	// ABSOLUTE: 	file:///root/file/path
+	// LOCAL: 	file://local/file/path
+	// RELATIVE: 	file ./file ../file
+	Func func(*starlark.Thread) (starlark.Value, error)
 
 	triggers []*Action // reverse of deps
 	pending  int       // number of actions pending
@@ -50,6 +46,56 @@ type Action struct {
 	Failed    bool           // whether the action failed
 	TimeReady time.Time
 	TimeDone  time.Time
+}
+
+// Struct is a helper for strarlarkstruct.
+type Struct struct {
+	*starlarkstruct.Struct
+}
+
+// loadStructValue gets the value and checks the constructor type matches.
+func (a *Action) loadStructValue(constructor starlark.Value) (Struct, error) {
+	if a.Value == nil {
+		return Struct{}, fmt.Errorf("missing struct value")
+	}
+	s, ok := a.Value.(*starlarkstruct.Struct)
+	if !ok {
+		return Struct{}, fmt.Errorf("invalid type: %T", a.Value)
+	}
+	// Constructor values must be comparable
+	if c := s.Constructor(); c != constructor {
+		return Struct{}, fmt.Errorf("invalid struct type: %s", c)
+	}
+	return Struct{s}, nil
+}
+
+func (s Struct) AttrString(name string) (string, error) {
+	x, err := s.Attr(name)
+	if err != nil {
+		return "", err
+	}
+	v, ok := starlark.AsString(x)
+	if !ok {
+		return "", fmt.Errorf("attr %q not a string", name)
+	}
+	return v, nil
+}
+
+// FailureErr is a DFS on the failed action, returns nil if not failed.
+func (a *Action) FailureErr() error {
+	if !a.Failed {
+		return nil
+	}
+	if a.Error != nil {
+		return a.Error
+	}
+	for _, a := range a.Deps {
+		if err := a.FailureErr(); err != nil {
+			return err
+		}
+	}
+	// TODO: panic?
+	return fmt.Errorf("unknown failure: %s", a.Key)
 }
 
 // An actionQueue is a priority queue of actions.
@@ -78,7 +124,8 @@ func (q *actionQueue) pop() *Action {
 
 // A Builder holds global state about a build.
 type Builder struct {
-	WorkDir string // temporary work directoy
+	Dir    string // directory
+	tmpDir string // temporary directory TODO: caching tmp dir?
 
 	actionCache map[string]*Action // a cache of already-constructed actions
 	rulesCache  map[string]*rule   // a cache of created rules
@@ -121,24 +168,50 @@ func (b *Builder) load(thread *starlark.Thread, module string) (starlark.StringD
 	return starlark.ExecFile(thread, module, src, globals)
 }
 
-func (b *Builder) createAction(ctx context.Context, label string) (*Action, error) {
+func (b *Builder) addAction(label string, action *Action) *Action {
+	if b.actionCache == nil {
+		b.actionCache = make(map[string]*Action)
+	}
+	b.actionCache[label] = action
+	return action
+}
 
+func parseLabel(label string, dir string) (*url.URL, error) {
 	u, err := url.Parse(label)
 	if err != nil {
 		return nil, err
 	}
-	isURL := err == nil && u.Scheme != "" && u.Host != ""
-	if isURL || err != nil {
-		// TODO: handle URL?
+	fmt.Printf("%+v\n", *u)
+	if err != nil {
 		return nil, fmt.Errorf("error: invalid label %s", label)
 	}
+	if u.Scheme == "" {
+		u.Scheme = "file"
+		if len(u.Path) > 0 && u.Path[0] != '/' {
+			u.Path = path.Join(dir, u.Path)
+		}
+	}
+	if u.Scheme != "file" {
+		return nil, fmt.Errorf("error: unknown scheme %s", u.Scheme)
+	}
 
+	// HACK: host -> path
+	if u.Scheme == "file" && u.Host != "" {
+		u.Path = path.Join(u.Host, u.Path)
+		u.Host = ""
+	}
+	return u, nil
+}
+
+func (b *Builder) createAction(ctx context.Context, u *url.URL) (*Action, error) {
+
+	// TODO: validate URL type
 	// TODO: label needs to be cleaned...
-	label = u.String()
+	label := u.String()
 	key := u.Path
 	name := path.Base(key)
 	dir := path.Dir(key)
-	fmt.Println("key", key, "name", name, "dir", dir)
+	fmt.Println("u", u.String(), "key", key, "name", name, "dir", dir)
 
 	if action, ok := b.actionCache[label]; ok {
 		return action, nil
@@ -180,18 +253,25 @@ func (b *Builder) createAction(ctx context.Context, label string) (*Action, erro
 		b.moduleCache[module] = true
 	}
 
-	// Load rule.
+	// Load rule, or file.
 	r, ok := b.rulesCache[key]
 	if !ok {
-		if !exists(key) {
+		fi, err := os.Stat(key)
+		if err != nil {
 			return nil, fmt.Errorf("error: label not found: %s", label)
 		}
 
-		// File parameter.
-		panic(fmt.Sprintf("TODO: loading files!"))
+		// File param.
+		return b.addAction(label, &Action{
+			Deps: nil,
+			Key:  key,
+			Func: func(*starlark.Thread) (starlark.Value, error) {
+				return newFile(key, fi)
+			},
+		}), nil
 	}
 
-	// Parse query params
+	// Parse query params, override args.
 	for key, vals := range u.Query() {
 		attr, ok := r.attrs[key]
 		if !ok {
@@ -215,7 +295,9 @@ func (b *Builder) createAction(ctx context.Context, label string) (*Action, erro
 	// TODO: caching the ins & outs?
 	// should caching be done on the action execution?
 
-	// Find arg deps as attributes.
+	attrs := make(starlark.StringDict)
+
+	// Find arg deps as attributes and resolve args to targets.
 	var deps []*Action
 	for key, arg := range r.args {
 		attr := r.attrs[key]
@@ -223,82 +305,102 @@ func (b *Builder) createAction(ctx context.Context, label string) (*Action, erro
 		switch attr.typ {
 		case attrTypeLabel:
 			label := string(arg.(starlark.String))
-			action, err := b.createAction(ctx, label)
+			u, err := parseLabel(label, dir)
 			if err != nil {
-				fmt.Println("failed because of action!", label)
 				return nil, err
 			}
+			action, err := b.createAction(ctx, u)
+			if err != nil {
+				return nil, fmt.Errorf("action creation: %w", err)
+			}
 			deps = append(deps, action)
+			attrs[key] = newTarget(label, action)
+
 		case attrTypeLabelList:
+			var elems []starlark.Value
 			iter := arg.(starlark.Iterable).Iterate()
 			var x starlark.Value
 			for iter.Next(&x) {
 				label := string(x.(starlark.String))
-				action, err := b.createAction(ctx, label)
+				u, err := parseLabel(label, dir)
 				if err != nil {
 					return nil, err
 				}
+				action, err := b.createAction(ctx, u)
+				if err != nil {
+					return nil, fmt.Errorf("action creation: %w", err)
+				}
 				deps = append(deps, action)
+				elems = append(elems, newTarget(
+					label, action,
+				))
 			}
 			iter.Done()
+			attrs[key] = starlark.NewList(elems)
+
 		case attrTypeLabelKeyedStringDict:
 			panic("TODO")
+
 		default:
-			// do nothing
+			// copy
+			attrs[key] = arg
 		}
 	}
 
-	// TODO: build action list...
-	action := &Action{
-		Deps:  deps,
-		Key:   key,
-		Attrs: r.args,
-		Func:  r.impl,
-	}
-
-	if b.actionCache == nil {
-		b.actionCache = make(map[string]*Action)
-	}
-	b.actionCache[label] = action
-	return action, nil
+	return b.addAction(label, &Action{
+		Deps: deps,
+		Key:  key,
+		Func: func(thread *starlark.Thread) (starlark.Value, error) {
+			args := starlark.Tuple{
+				newCtxModule(ctx, key, b.Dir, b.tmpDir, attrs),
+			}
+			return starlark.Call(thread, r.impl, args, nil)
+		},
+	}), nil
 }
 
+// TODO: caching with tmp dir.
 func (b *Builder) init(ctx context.Context) error {
 	tmpDir, err := ioutil.TempDir("", "laze")
 	if err != nil {
 		return err
 	}
-	b.WorkDir = tmpDir
+	b.tmpDir = tmpDir
 	return nil
 }
 
 func (b *Builder) cleanup() error {
-	if b.WorkDir != "" {
-		start := time.Now()
-		for {
-			err := os.RemoveAll(b.WorkDir)
-			if err == nil {
-				break
-			}
-
-			// On some configurations of Windows, directories containing executable
-			// files may be locked for a while after the executable exits (perhaps
-			// due to antivirus scans?). It's probably worth a little extra latency
-			// on exit to avoid filling up the user's temporary directory with leaked
-			// files. (See golang.org/issue/30789.)
-			if runtime.GOOS != "windows" || time.Since(start) >= 500*time.Millisecond {
-				return fmt.Errorf("failed to remove work dir: %v", err)
-			}
-			time.Sleep(5 * time.Millisecond)
-		}
-	}
+	//if b.WorkDir != "" {
+	//	start := time.Now()
+	//	for {
+	//		err := os.RemoveAll(b.WorkDir)
+	//		if err == nil {
+	//			break
+	//		}
+	//		// On some configurations of Windows, directories containing executable
+	//		// files may be locked for a while after the executable exits (perhaps
+	//		// due to antivirus scans?). It's probably worth a little extra latency
+	//		// on exit to avoid filling up the user's temporary directory with leaked
+	//		// files. (See golang.org/issue/30789.)
+	//		if runtime.GOOS != "windows" || time.Since(start) >= 500*time.Millisecond {
+	//			return fmt.Errorf("failed to remove work dir: %v", err)
+	//		}
+	//		time.Sleep(5 * time.Millisecond)
+	//	}
+	//}
 	return nil
 }
 
-func (b *Builder) Build(ctx context.Context, label string) (*Action, error) {
+func (b *Builder) Build(ctx context.Context, args []string, label string) (*Action, error) {
+	// TODO: handle args.
 
-	//
-	root, err := b.createAction(ctx, label)
+	u, err := parseLabel(label, ".")
+	if err != nil {
+		return nil, err
+	}
+
+	// create action
+	root, err := b.createAction(ctx, u)
 	if err != nil {
 		return nil, err
 	}
@@ -368,13 +470,9 @@ func (b *Builder) Do(ctx context.Context, root *Action) {
 				// Run job.
 				var value starlark.Value = starlark.None
 				var err error
+				fmt.Println("RUNNING ACTION", a.Key, "failed?", a.Failed)
 				if a.Func != nil && !a.Failed {
-
-					args := starlark.Tuple([]starlark.Value{
-						newCtxModule(ctx, a.Key, a.Attrs),
-					})
-
-					value, err = starlark.Call(thread, a.Func, args, nil)
+					value, err = a.Func(thread)
 				}
 				if err != nil {
 					// Log?
@@ -416,67 +514,3 @@ func (b *Builder) Do(ctx context.Context, root *Action) {
 	}
 	fmt.Println("completed do")
 }
-
-/*
-// KO run.
-type run struct {
-	name       string
-	env        []string
-	deps, outs []string
-
-	//args []string
-
-	//tempDir bool
-}
-
-func run(ctx context.Context, ip string, dir string, platform v1.Platform, disableOptimizations bool) (string, error) {
-	tmpDir, err := ioutil.TempDir("", "laze")
-	if err != nil {
-		return "", err
-	}
-	file := filepath.Join(tmpDir, "out")
-
-	args := make([]string, 0, 7)
-	args = append(args, "build")
-	if disableOptimizations {
-		// Disable optimizations (-N) and inlining (-l).
-		args = append(args, "-gcflags", "all=-N -l")
-	}
-	args = append(args, "-o", file)
-	args = addGo113TrimPathFlag(args)
-	args = append(args, ip)
-	cmd := exec.CommandContext(ctx, "go", args...)
-	cmd.Dir = dir
-
-	// Last one wins
-	defaultEnv := []string{
-		"CGO_ENABLED=0",
-		"GOOS=" + platform.OS,
-		"GOARCH=" + platform.Architecture,
-	}
-
-	if strings.HasPrefix(platform.Architecture, "arm") && platform.Variant != "" {
-		goarm, err := getGoarm(platform)
-		if err != nil {
-			return "", fmt.Errorf("goarm failure for %s: %v", ip, err)
-		}
-		if goarm != "" {
-			defaultEnv = append(defaultEnv, "GOARM="+goarm)
-		}
-	}
-
-	cmd.Env = append(defaultEnv, os.Environ()...)
-
-	var output bytes.Buffer
-	cmd.Stderr = &output
-	cmd.Stdout = &output
-
-	log.Printf("Building %s for %s", ip, platformToString(platform))
-	if err := cmd.Run(); err != nil {
-		os.RemoveAll(tmpDir)
-		log.Printf("Unexpected error running \"go build\": %v\n%v", err, output.String())
-		return "", err
-	}
-	return file, nil
-}
-*/

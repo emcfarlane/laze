@@ -1,5 +1,4 @@
-load("languages/proto.star", "protoc", "protoc_plugin")
-#load("languages/go.star", "protoc_go")
+load("rules/proto.star", "protoc", "protoc_plugin")
 
 protoc_plugin(
     name = "protoc_go",

@@ -124,8 +124,8 @@ func (q *actionQueue) pop() *Action {
 
 // A Builder holds global state about a build.
 type Builder struct {
-	Dir    string // work directoy
-	tmpDir string // temporary directoy
+	Dir    string // directory
+	tmpDir string // temporary directory TODO: caching tmp dir?
 
 	actionCache map[string]*Action // a cache of already-constructed actions
 	rulesCache  map[string]*rule   // a cache of created rules
@@ -347,25 +347,24 @@ func (b *Builder) createAction(ctx context.Context, u *url.URL) (*Action, error)
 		}
 	}
 
-	// TODO: build action list...
 	return b.addAction(label, &Action{
 		Deps: deps,
 		Key:  key,
 		Func: func(thread *starlark.Thread) (starlark.Value, error) {
 			args := starlark.Tuple{
-				newCtxModule(ctx, key, attrs),
+				newCtxModule(ctx, key, b.Dir, b.tmpDir, attrs),
 			}
 			return starlark.Call(thread, r.impl, args, nil)
 		},
 	}), nil
 }
 
+// TODO: caching with tmp dir.
 func (b *Builder) init(ctx context.Context) error {
 	tmpDir, err := ioutil.TempDir("", "laze")
 	if err != nil {
 		return err
 	}
-	b.Dir = ""
 	b.tmpDir = tmpDir
 	return nil
 }

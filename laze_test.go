@@ -32,7 +32,9 @@ func TestBuild(t *testing.T) {
 		error error
 	}
 
-	b := Builder{}
+	b := Builder{
+		Dir: "", // TODO: testdata dir?
+	}
 
 	tests := []struct {
 		name            string

@@ -4,39 +4,16 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"io/fs"
 	"log"
 	"os"
 	"os/exec"
 	"path"
-	"path/filepath"
 	"regexp"
 	"runtime"
 
 	"go.starlark.net/starlark"
 	"go.starlark.net/starlarkstruct"
 )
-
-// File
-const fileConstructor starlark.String = "file"
-
-func newFile(key string, fi fs.FileInfo) (*starlarkstruct.Struct, error) {
-	name := fi.Name()
-	dir := path.Dir(key)
-	ospath, err := filepath.Abs(filepath.FromSlash(key))
-	if err != nil {
-		return nil, err
-	}
-	return starlarkstruct.FromStringDict(fileConstructor, starlark.StringDict{
-		"basename":     starlark.String(path.Base(name)),
-		"dirname":      starlark.String(filepath.FromSlash(dir)),
-		"extension":    starlark.String(path.Ext(name)),
-		"path":         starlark.String(ospath),
-		"is_directory": starlark.Bool(fi.IsDir()),
-		//"is_source":    starlark.Bool(isSource),
-		"size": starlark.MakeInt64(fi.Size()),
-	}), nil
-}
 
 // target lazily resolves the action to a starlark value.
 type target struct {
@@ -109,7 +86,7 @@ func (l *Label) Freeze() {} // immutable
 
 func ParseLabel(label string) (Label, error)*/
 
-func newCtxModule(ctx context.Context, key string, attrs starlark.StringDict) *starlarkstruct.Module {
+func newCtxModule(ctx context.Context, key, dir, tmpDir string, attrs starlark.StringDict) *starlarkstruct.Module {
 	return &starlarkstruct.Module{
 		Name: "ctx",
 		Members: starlark.StringDict{
@@ -118,7 +95,8 @@ func newCtxModule(ctx context.Context, key string, attrs starlark.StringDict) *s
 			"os":   starlark.String(runtime.GOOS),
 			"arch": starlark.String(runtime.GOARCH),
 
-			// TODO: make better???
+			"dir":             starlark.String(dir),
+			"tmp_dir":         starlark.String(tmpDir),
 			"build_dir":       starlark.String(path.Dir(key)),
 			"build_file_path": starlark.String(path.Join(path.Dir(key), "BUILD.star")),
 
@@ -139,7 +117,7 @@ func newActionsModule(ctx context.Context, key string) *starlarkstruct.Module {
 		Name: "actions",
 		Members: starlark.StringDict{
 			"run":       starlark.NewBuiltin("actions.run", a.run),
-			"file":      starlark.NewBuiltin("actions.file", a.file),
+			"files":     newFilesModule(a),
 			"packaging": newPackagingModule(a),
 			"container": newContainerModule(a),
 		},
@@ -202,26 +180,6 @@ func (a *actions) run(thread *starlark.Thread, b *starlark.Builtin, args starlar
 	}
 
 	return starlark.None, nil
-}
-
-func (a *actions) file(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
-	var (
-		name string
-	)
-
-	if err := starlark.UnpackArgs(
-		"file", args, kwargs,
-		"name", &name,
-	); err != nil {
-		return nil, err
-	}
-
-	fi, err := os.Stat(name)
-	if err != nil {
-		return nil, err
-	}
-	return newFile(name, fi)
-
 }
 
 // rule a laze build rule for implementing actions.

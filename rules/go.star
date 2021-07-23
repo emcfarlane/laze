@@ -1,9 +1,10 @@
 load("rule.star", "attr", "rule")
 
+# TODO: filepath.Join() support for pathing...
 def _go_impl(ctx):
-    #for name in dir(ctx.attrs):
-    #    print("go attrs", name)
-    #    print("go attrs", name, getattr(ctx.attrs, name))
+    # TODO: out_dir?
+    #name = ctx.actions.files.declare(ctx.out_dir, ctx.key)
+    #args = ["build", "-o", name]
     args = ["build", "-o", ctx.attrs.name]
 
     env = []
@@ -30,7 +31,7 @@ def _go_impl(ctx):
         args = args,
         env = env,
     )
-    return ctx.actions.file(
+    return ctx.actions.files.stat(
         name = ctx.build_dir + "/" + ctx.attrs.name,
     )
 

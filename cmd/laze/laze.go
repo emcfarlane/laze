@@ -25,7 +25,9 @@ func run() error {
 	label := args[len(args)-1]
 	args = args[:len(args)-1]
 
-	b := laze.Builder{}
+	b := laze.Builder{
+		Dir: "", // TODO: configuration?
+	}
 
 	ctx := context.Background()
 	a, err := b.Build(ctx, args, label)

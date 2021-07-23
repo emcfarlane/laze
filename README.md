@@ -41,14 +41,22 @@ Label targets can take query parameters to override target fields.
 
 ```
 go(
-    name = "binary",
+    name = "hello",
+)
+
+tar(
+    name = "helloc.tar.gz",
+    srcs = ["file://helloc?goarch=amd64&goos=linux"],
+    package_dir = "/usr/bin",
+    strip_prefix = "",
 )
 
 container_image(
-  name="app",
-  layer=[
-    "binary?os=linux&arch=amd64"
-  ],
+    name = "helloc.tar",
+    base = "distroless.tar",
+    entrypoint = ["/usr/bin/helloc"],
+    krioritized_files = ["/usr/bin/hello"],  # Supports estargz.
+    tar = "../packaging/helloc.tar.gz",
 )
 ```
 
@@ -58,6 +66,9 @@ But on the host we will want to execute the binaries under the host arch.
 Therefore we can use the host as the default and override to the platform with
 query parameters. Avoiding the need to specify build flags on every invocation.
 
+TODO: Commands should be able to depend on any type of action.
+This would allow an action to depend on an action of a different type.
+Like a container push depending on all tests passing.
 
 ### Label Protocols
 
@@ -74,7 +85,7 @@ Go builds!
 
 ```
 go(
-  name = "mycmd"
+  name = "binary"
 )
 ```
 
@@ -83,6 +94,12 @@ go(
 #### cgo
 
 CGO is support through `zig`!
+```
+go(
+  name = "mycmd",
+  cgo = True,
+)
+```
 
 [Example](testdata/cgo/BUILD.star)
 

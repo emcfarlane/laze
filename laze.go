@@ -81,6 +81,23 @@ func (s Struct) AttrString(name string) (string, error) {
 	return v, nil
 }
 
+// FailureErr is a DFS on the failed action, returns nil if not failed.
+func (a *Action) FailureErr() error {
+	if !a.Failed {
+		return nil
+	}
+	if a.Error != nil {
+		return a.Error
+	}
+	for _, a := range a.Deps {
+		if err := a.FailureErr(); err != nil {
+			return err
+		}
+	}
+	// TODO: panic?
+	return fmt.Errorf("unknown failure: %s", a.Key)
+}
+
 // An actionQueue is a priority queue of actions.
 type actionQueue []*Action
 
@@ -323,6 +340,7 @@ func (b *Builder) createAction(ctx context.Context, u *url.URL) (*Action, error)
 
 		case attrTypeLabelKeyedStringDict:
 			panic("TODO")
+
 		default:
 			// copy
 			attrs[key] = arg
@@ -374,7 +392,9 @@ func (b *Builder) cleanup() error {
 	return nil
 }
 
-func (b *Builder) Build(ctx context.Context, label string) (*Action, error) {
+func (b *Builder) Build(ctx context.Context, args []string, label string) (*Action, error) {
+	// TODO: handle args.
+
 	u, err := parseLabel(label, ".")
 	if err != nil {
 		return nil, err

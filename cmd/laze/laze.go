@@ -4,52 +4,44 @@ package main
 import (
 	"context"
 	"flag"
+	"fmt"
 	"log"
 
 	"github.com/emcfarlane/laze"
 )
 
+// TODO: add support for fmt starlark files on build.
 // laze fmt: https://github.com/bazelbuild/buildtools/blob/master/buildifier2/buildifier2.go
 
-// args
-func main() {
+func run() error {
 	flag.Parse()
 
 	args := flag.Args()
 
-	switch len(args) {
-	case 0:
-		log.Fatal("Argument missing")
-	case 1:
-		log.Fatal("Arguments missing")
-		//filename := flag.Args()[0]
-		//ast, err := syntax.Parse(filename, nil, syntax.RetainComments)
-		//if err != nil {
-		//	log.Fatalf("%+v\n", err)
-		//}
-		//newAst := convertast.ConvFile(ast)
-		//fmt.Print(build.FormatString(newAst))
-	case 2:
-		ctx := context.Background()
-		switch args[0] {
-		case "build":
-			b := laze.Builder{}
+	if len(args) < 1 {
+		return fmt.Errorf("missing label")
+	}
 
-			_, err := b.Build(ctx, args[1])
-			if err != nil {
-				log.Fatal(err)
-			}
+	label := args[len(args)-1]
+	args = args[:len(args)-1]
 
-		case "run":
-			// TODO: how to run?
-			// provider is a single file?
+	b := laze.Builder{}
 
-		default:
-			// TODO:
-			log.Fatal("Unknown argument")
-		}
+	ctx := context.Background()
+	a, err := b.Build(ctx, args, label)
+	if err != nil {
+		return err
+	}
 
-	default:
-		//log.Fatal("want at most one Skylark file name")
+	// Report error on failed actions.
+	if err := a.FailureErr(); err != nil {
+		return err
+	}
+	return nil
+}
+
+func main() {
+	if err := run(); err != nil {
+		log.Fatal(err)
 	}
 }

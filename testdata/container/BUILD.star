@@ -20,5 +20,5 @@ container_build(
 container_push(
     name = "myrepo",
     image = "helloc.tar",
-    reference = "gcr.io/laze/helloc:latest",
+    reference = "gcr.io/star-c25e4/helloc:latest",
 )

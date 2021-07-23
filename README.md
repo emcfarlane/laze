@@ -21,38 +21,33 @@ So use at your own risk.
 go get install github.com/emcfarlane/laze/cmd/laze
 ```
 
-## Install with `laze` (TODO):
-
-```
-git(
-  name="laze"
-  src="https://github.com/emcfarlane/laze.git"
-)
-```
-
-```
-laze build laze/cmd/laze
-```
-
 # Docs 
 
 ## Labels
 
-Labels are URLs:
+Labels are what laze uses to identify resources. 
+Under the hood labels are represented as URLs.
+Relative paths are accepted too.
 
-- `path/to/file`
-- `path/to/name`
-- 'https://example.com/path/to/external`
+- `path/to/file.txt` : Relative path to file from the directory.
+- `../sibling/file.txt` : Relative path to folder in parent directory.
+- `file://path/from/root" : Local path from command root.
+- `file:///usr/bin/cat" : Absolute path in local filesystem.
+- `https://remote.com/source.py` : Remote file over http.
 
 ###  Label Query Parameters
 
 Label targets can take query parameters to override target fields.
 
 ```
+go(
+    name = "binary",
+)
+
 container_image(
   name="app",
   layer=[
-    "path/to/binary?os=linux&arch=amd64"
+    "binary?os=linux&arch=amd64"
   ],
 )
 ```
@@ -67,9 +62,7 @@ query parameters. Avoiding the need to specify build flags on every invocation.
 ### Label Protocols
 
 Supported protocols:
-
 - `https://`
-
 TODO(edward): add dynamic support for protocols.
 
 
@@ -81,20 +74,28 @@ Go builds!
 
 ```
 go(
-  name="mycmd"
+  name = "mycmd"
 )
 ```
+
+[Example](testdata/go/BUILD.star)
 
 #### cgo
 
 CGO is support through `zig`!
 
+[Example](testdata/cgo/BUILD.star)
+
 ### container
 
 Containers are supported with [github.com/google/go-containerregistry](github.com/google/go-containerregistry)
 
-Link 
+[Example](testdata/container/BUILD.star)
 
 ### proto
 
 Protobuffers are supported with native `protoc`.
+
+### TODO
+
+If you have a usecase for laze and would like support adding please file an issue!

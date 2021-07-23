@@ -35,7 +35,9 @@ container_build = rule(
 
 def _container_push_impl(ctx):
     return ctx.actions.container.push(
-        name = "",
+        name = ctx.attrs.name,
+        image = ctx.attrs.image,
+        reference = ctx.attrs.reference,
     )
 
 container_push = rule(

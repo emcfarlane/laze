@@ -65,7 +65,10 @@ func (c *container) pull(thread *starlark.Thread, b *starlark.Builtin, args star
 	}
 	ref.Context()
 
-	img, err := remote.Image(ref, remote.WithAuthFromKeychain(authn.DefaultKeychain))
+	img, err := remote.Image(ref,
+		remote.WithAuthFromKeychain(authn.DefaultKeychain),
+		remote.WithContext(c.ctx),
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -257,6 +260,7 @@ func (c *container) build(thread *starlark.Thread, b *starlark.Builtin, args sta
 }
 
 func (c *container) push(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
+	fmt.Println("RUNNING CONTAINER PUSH")
 	var (
 		name      string
 		image     *target
@@ -268,11 +272,7 @@ func (c *container) push(thread *starlark.Thread, b *starlark.Builtin, args star
 		"image", &image,
 		"reference", &reference,
 	); err != nil {
-		return nil, err
-	}
-
-	tag, err := cname.NewTag(reference, cname.StrictValidation)
-	if err != nil {
+		fmt.Println("failed on starlark")
 		return nil, err
 	}
 
@@ -286,20 +286,37 @@ func (c *container) push(thread *starlark.Thread, b *starlark.Builtin, args star
 	if err != nil {
 		return nil, err
 	}
+	imageRef, err := imageProvider.AttrString("reference")
+	if err != nil {
+		return nil, err
+	}
+
+	tag, err := cname.NewTag(imageRef, cname.StrictValidation)
+	if err != nil {
+		fmt.Println("FAILED ON tag")
+		return nil, err
+	}
 
 	// Load base from filesystem.
 	img, err := tarball.ImageFromPath(filename, &tag)
 	if err != nil {
+		fmt.Println("FAILED ON image load")
 		return nil, err
 	}
 
 	ref, err := cname.ParseReference(reference)
 	if err != nil {
+		fmt.Println("FAILED ON REF")
 		return nil, err
 	}
 
-	if err := remote.Write(ref, img); err != nil {
+	if err := remote.Write(ref, img,
+		remote.WithAuthFromKeychain(authn.DefaultKeychain),
+		remote.WithContext(c.ctx),
+	); err != nil {
+		fmt.Println("failing here?", err)
 		return nil, err
 	}
-	return nil, nil
+	fmt.Println("DONE CONTAINER PUSH")
+	return newImage(filename, reference), nil
 }
